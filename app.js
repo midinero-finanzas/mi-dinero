@@ -42,7 +42,7 @@ const persist = {
 };
 
 async function load() {
-  S.settings = (await db.get('kv', 'settings')) || { currency: 'COP', lastScope: 'personal', lastAccount: null, lastBackup: null, createdAt: Date.now() };
+  S.settings = (await db.get('kv', 'settings')) || { currency: 'COP', lastScope: 'personal', lastAccount: 'a1', lastBackup: null, createdAt: Date.now() };
   S.categories = (await db.get('kv', 'categories')) || structuredClone(DEFAULT_CATEGORIES);
   S.accounts = (await db.get('kv', 'accounts')) || structuredClone(DEFAULT_ACCOUNTS);
   S.recurring = (await db.get('kv', 'recurring')) || [];
@@ -104,6 +104,10 @@ function groupedList(list) {
     const tt = totals(items);
     return `<div class="day-head"><span>${esc(dayLabel(d))}</span><span class="num ${tt.bal >= 0 ? 'inc' : 'exp'}">${fmt(tt.bal, true)}</span></div>${items.map(txRow).join('')}`;
   }).join('');
+}
+function accPicker(sel, act) {
+  const opts = [...S.accounts.map(a => ({ id: a.id, icon: a.icon, name: a.name })), { id: '', icon: '➖', name: 'Sin cuenta' }];
+  return `<div class="acc-grid">${opts.map(a => `<button class="acc-btn ${(sel || '') === a.id ? 'on' : ''}" data-act="${act}" data-v="${a.id}"><span class="ai">${esc(a.icon)}</span><span>${esc(a.name)}</span></button>`).join('')}</div>`;
 }
 const scopeSeg = () => `<div class="seg">${[['todo', 'Todo'], ['personal', '👤 Personal'], ['negocio', '💼 Negocio']].map(([k, l]) => `<button data-act="scope" data-v="${k}" class="${V.scope === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 
@@ -269,7 +273,7 @@ function viewAjustes() {
     <div class="list-title">Exportar y respaldo</div>
     <div class="list">
       <button class="row" data-act="export"><span class="ico" style="background:#1f7a4522">📊</span><span class="mid">Exportar a Excel / CSV<small>Para tu contabilidad, por mes, año o rango</small></span><span class="chev">›</span></button>
-      <button class="row" data-act="backup"><span class="ico" style="background:#2f80ed22">☁️</span><span class="mid">Guardar copia de seguridad<small>${S.settings.lastBackup ? 'Última: ' + new Date(S.settings.lastBackup).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : 'Nunca'} · guárdala en iCloud Drive</small></span><span class="chev">›</span></button>
+      <button class="row" data-act="backup"><span class="ico" style="background:#2f80ed22">☁️</span><span class="mid">Copia de seguridad<small>${S.settings.lastBackup ? 'Última: ' + new Date(S.settings.lastBackup).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : 'Nunca'} · guárdala en iCloud Drive</small></span><span class="chev">›</span></button>
       <button class="row" data-act="import"><span class="ico" style="background:#8e5cd922">📥</span><span class="mid">Restaurar o importar<small>Copia de seguridad o historial</small></span><span class="chev">›</span></button>
     </div>
     <div class="list-title">Categorías de ingreso (6)</div><div class="list">${catRows('ingreso')}</div>
@@ -397,7 +401,7 @@ function openEntry({ type = 'gasto', tx = null, prefill = null } = {}) {
     date: base?.date || V.day || today(),
     note: base?.note || '',
     scope: base?.scope || S.settings.lastScope || 'personal',
-    accountId: base ? (base.accountId ?? null) : S.settings.lastAccount ?? null,
+    accountId: base ? (base.accountId ?? null) : (S.settings.lastAccount && ACC[S.settings.lastAccount] ? S.settings.lastAccount : null),
     photoId: tx?.photoId || null,
     photoUrl: null,
     newPhoto: null,
@@ -425,10 +429,12 @@ function openEntry({ type = 'gasto', tx = null, prefill = null } = {}) {
       <div class="entry-scroll">
         <button class="chosen" data-act="to-cats">${icoHtml(c)}<span class="mid">${esc(c.name)}<small>${E.type === 'gasto' ? 'Gasto' : 'Ingreso'} · toca para cambiar</small></span><span class="chev">›</span></button>
         <div class="amount ${E.type === 'gasto' ? 'g' : 'i'}"><div class="expr num">${hasOp ? esc(prettyExpr(E.expr)) + ' =' : '&nbsp;'}</div><div class="big num">${fmt(val)}</div></div>
+        <div class="pick-label">¿Es personal o del negocio?</div>
         <div class="scope2"><button class="p ${E.scope === 'personal' ? 'on' : ''}" data-act="scope-e" data-v="personal">👤 Personal</button><button class="n ${E.scope === 'negocio' ? 'on' : ''}" data-act="scope-e" data-v="negocio">💼 Negocio</button></div>
+        <div class="pick-label">${E.type === 'gasto' ? '¿Con qué pagaste?' : '¿Dónde lo recibiste?'}</div>
+        ${accPicker(E.accountId, 'acc-e')}
         <div class="field"><label>Fecha</label><input type="date" name="date" value="${E.date}" required></div>
         <div class="field"><label>Nota</label><input type="text" name="note" value="${esc(E.note)}" placeholder="Ej: mercado en el D1" enterkeyhint="done" autocomplete="off"></div>
-        <div class="chips"><button class="chip ${!E.accountId ? 'on' : ''}" data-act="acc-e" data-v="">Sin cuenta</button>${S.accounts.map(a => `<button class="chip ${E.accountId === a.id ? 'on' : ''}" data-act="acc-e" data-v="${a.id}">${esc(a.icon)} ${esc(a.name)}</button>`).join('')}</div>
         <div class="photo-row">${E.photoUrl && !E.removePhoto ? `<img class="thumb" src="${E.photoUrl}" data-act="view-photo" alt="Recibo"><button class="chip" data-act="photo">Cambiar foto</button><button class="chip" data-act="rm-photo">Quitar</button>` : '<button class="chip" data-act="photo">📷 Foto del recibo</button>'}</div>
       </div>
       <div class="keypad">
@@ -611,8 +617,10 @@ function openRecEditor(id) {
         <div class="field"><label>Día del mes</label><select name="day">${Array.from({ length: 31 }, (_, i) => `<option ${+st.day === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></div>
         <div class="list-title">Categoría</div>
         <div class="chips" style="flex-wrap:wrap">${S.categories.filter(c => c.type === st.type).map(c => `<button class="chip ${st.catId === c.id ? 'on' : ''}" data-act="cat" data-v="${c.id}">${esc(c.icon)} ${esc(c.name)}</button>`).join('')}</div>
+        <div class="pick-label">¿Es personal o del negocio?</div>
         <div class="scope2"><button class="p ${st.scope === 'personal' ? 'on' : ''}" data-act="scope-r" data-v="personal">👤 Personal</button><button class="n ${st.scope === 'negocio' ? 'on' : ''}" data-act="scope-r" data-v="negocio">💼 Negocio</button></div>
-        <div class="chips"><button class="chip ${!st.accountId ? 'on' : ''}" data-act="acc-r" data-v="">Sin cuenta</button>${S.accounts.map(a => `<button class="chip ${st.accountId === a.id ? 'on' : ''}" data-act="acc-r" data-v="${a.id}">${esc(a.icon)} ${esc(a.name)}</button>`).join('')}</div>
+        <div class="pick-label">¿Con qué se paga?</div>
+        ${accPicker(st.accountId, 'acc-r')}
         ${r ? `<button class="btn sec" data-act="toggle">${st.active === false ? '▶︎ Reactivar' : '⏸ Pausar'}</button><button class="btn danger" data-act="delete">Eliminar pago fijo</button>` : ''}
       </div>`,
     onInput: e => { if (e.target.name in st) st[e.target.name] = e.target.value; },
@@ -746,6 +754,24 @@ function excelSheets(list, label, scope) {
 // ---------- respaldo ----------
 const blobToDataUrl = b => new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); });
 
+async function openBackup() {
+  const nPhotos = (await db.keys('photos')).length;
+  openSheet({
+    render: () => `<div class="sheet-head"><button></button><h3>Copia de seguridad</h3><button data-act="close">Cerrar</button></div>
+      <div class="sheet-body">
+        <div class="card" style="text-align:center"><div style="font-size:44px">☁️</div>
+          <div style="font-size:20px;font-weight:800;margin-top:4px">${S.txs.length} movimientos</div>
+          <div class="muted" style="font-size:14px">${nPhotos} fotos de recibos · ${S.recurring.length} pagos fijos · tus categorías y cuentas</div>
+          <div class="muted" style="font-size:13px;margin-top:8px">${S.settings.lastBackup ? 'Última copia: ' + new Date(S.settings.lastBackup).toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' }) : 'Aún no has guardado ninguna copia'}</div></div>
+        <button class="btn" data-act="go">Guardar copia</button>
+        <div class="card"><h3>¿Cómo se guarda?</h3><p class="hint" style="margin:0">Toca <b>Guardar copia</b> → <b>Guardar en Archivos</b> → elige <b>iCloud Drive</b> → <b>Guardar</b>. Para recuperar todo en otro iPhone: Ajustes → Restaurar o importar.</p></div>
+        <div class="card"><h3>¿Por qué el archivo se ve como código?</h3><p class="hint" style="margin:0">La copia es un archivo hecho para que <b>Mi Dinero</b> lo lea, no para leerlo tú. Si lo abres verás texto técnico: es normal, así guarda todo sin perder nada. Para ver tus números de forma clara usa <b>Exportar a Excel</b>.</p></div>
+        <p class="hint" style="text-align:center;margin:0">🔒 Tus datos solo están en este iPhone y en tu propia cuenta de iCloud.</p>
+      </div>`,
+    actions: { close: (b, s) => s.close(), go: async (b, s) => { s.close(); await doBackup(); } },
+  });
+}
+
 async function doBackup() {
   toast('Preparando copia…');
   const photos = {};
@@ -798,7 +824,7 @@ async function doImport() {
 
 async function wipe() {
   const a = await ask('¿Borrar todos los datos?', 'Se eliminan todos tus movimientos, pagos fijos y fotos de este dispositivo. Guarda antes una copia de seguridad.', [{ label: 'Guardar copia primero', value: 'backup' }, { label: 'Borrar todo', style: 'danger', value: 'wipe' }, { label: 'Cancelar', style: 'sec', value: null }]);
-  if (a === 'backup') return doBackup();
+  if (a === 'backup') return openBackup();
   if (a !== 'wipe') return;
   if (!(await ask('¿Seguro?', 'Esta es la última confirmación.', [{ label: 'Sí, borrar todo', style: 'danger', value: true }, { label: 'Cancelar', style: 'sec', value: false }]))) return;
   await db.clear();
@@ -827,12 +853,32 @@ const MAIN = {
   'pay-rec': b => payRecurring(b.dataset.id),
   currency: () => openCurrency(),
   export: () => openExport(),
-  backup: () => doBackup(),
+  backup: () => openBackup(),
   import: () => doImport(),
   wipe: () => wipe(),
 };
 document.getElementById('view').addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b) MAIN[b.dataset.act]?.(b); });
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { V.tab = b.dataset.tab; render(); scrollTo(0, 0); } });
+
+// ---------- efecto al tocar ----------
+const TOUCHABLE = 'button, [data-act], [data-tab]';
+const LIGHT_RIPPLE = '.fab button, .btn:not(.sec):not(.danger), .chip.on, .acc-btn.on, .scope2 .on, .type-seg .on, .keypad .save, .cal .sel, .seg button:not(.on), .month-nav button';
+document.addEventListener('touchstart', () => {}, { passive: true }); // activa :active en iOS
+document.addEventListener('pointerdown', e => {
+  const b = e.target.closest(TOUCHABLE);
+  if (!b || b.tagName === 'TR' || b.tagName === 'IMG') return;
+  const r = b.getBoundingClientRect();
+  const host = document.createElement('div');
+  host.className = 'ripple-host';
+  host.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:${getComputedStyle(b).borderRadius}`;
+  const d = Math.hypot(r.width, r.height) * 2;
+  const dot = document.createElement('span');
+  dot.className = 'ripple' + (b.matches(LIGHT_RIPPLE) ? ' light' : '');
+  dot.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX - r.left - d / 2}px;top:${e.clientY - r.top - d / 2}px`;
+  host.appendChild(dot);
+  document.body.appendChild(host);
+  setTimeout(() => host.remove(), 600);
+}, { passive: true });
 
 // ---------- arranque ----------
 (async () => {

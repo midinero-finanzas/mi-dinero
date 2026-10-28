@@ -242,3 +242,20 @@ input, select, textarea { font: inherit; color: var(--text); }
 .dialog p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.45; }
 .dialog .btns { display: flex; flex-direction: column; gap: 8px; }
 .toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 12px); transform: translateX(-50%); z-index: 50; background: #17211b; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: calc(100% - 32px); text-align: center; }
+
+/* Selector de cuenta */
+.pick-label { font-size: 13px; font-weight: 700; color: var(--muted); margin: 4px 4px -4px; }
+.acc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; }
+.acc-btn { background: var(--card); box-shadow: var(--shadow); border-radius: 14px; padding: 10px 4px; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; line-height: 1.15; text-align: center; min-height: 70px; justify-content: center; border: 2px solid transparent; }
+.acc-btn .ai { font-size: 24px; line-height: 1; }
+.acc-btn.on { background: var(--brand-2); color: #fff; border-color: var(--brand-2); }
+
+/* Efecto al tocar */
+button, [data-act], [data-tab] { transition: transform .12s ease, filter .12s ease; }
+button:active, [data-act]:active { transform: scale(.97); filter: brightness(.94); }
+.cal .d:active { transform: scale(.9); }
+.ripple-host { position: fixed; overflow: hidden; pointer-events: none; z-index: 60; }
+.ripple { position: absolute; border-radius: 50%; background: rgba(120,120,120,.28); transform: scale(0); animation: ripple .55s ease-out forwards; }
+.ripple.light { background: rgba(255,255,255,.45); }
+@keyframes ripple { 60% { opacity: 1; } to { transform: scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ripple { animation-duration: .01s; } button:active, [data-act]:active { transform: none; } }
