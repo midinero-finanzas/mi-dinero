@@ -263,17 +263,34 @@ function viewFijos() {
   </div>`;
 }
 
+// ---------- instalación (iPhone, Android, computador) ----------
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (V.tab === 'ajustes') render(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; toast('Mi Dinero quedó instalada'); render(); });
+const cloud = () => (platform() === 'android' ? 'Google Drive' : 'iCloud Drive');
+const platform = () => { const ua = navigator.userAgent; if (/android/i.test(ua)) return 'android'; if (/iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return 'ios'; return 'pc'; };
+function installBanner() {
+  const p = platform();
+  if (installPrompt) return `<button class="banner" data-act="install"><span style="font-size:22px">📲</span><span><b>Instalar Mi Dinero</b>Queda como una app más en tu ${p === 'pc' ? 'computador' : 'celular'}, con su ícono.</span><span class="go">Instalar ›</span></button>`;
+  const how = {
+    ios: 'En Safari toca Compartir <b style="display:inline">⎋</b> y luego “Agregar a pantalla de inicio”.',
+    android: 'En Chrome toca el menú <b style="display:inline">⋮</b> y luego “Instalar aplicación” o “Agregar a la pantalla principal”.',
+    pc: 'En Chrome o Edge toca el ícono de instalar en la barra de direcciones. En Safari (Mac): Archivo → “Agregar al Dock”.',
+  }[p];
+  return `<div class="banner"><span style="font-size:22px">📲</span><span><b>Instala la app</b>${how}</span></div>`;
+}
+
 function viewAjustes() {
   const cur = CURRENCIES.find(c => c[0] === S.settings.currency);
   const catRows = type => S.categories.filter(c => c.type === type).map((c, i) => `<button class="row" data-act="edit-cat" data-id="${c.id}"><span class="slot">${i + 1}</span>${icoHtml(c)}<span class="mid">${esc(c.name)}</span><span class="chev">›</span></button>`).join('');
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   return `<div class="page-top"><h2>Ajustes</h2></div>
   <div class="page">
-    ${standalone ? '' : `<div class="banner"><span style="font-size:22px">📲</span><span><b>Instálala en tu iPhone</b>En Safari toca Compartir <b style="display:inline">⎋</b> y luego “Agregar a pantalla de inicio”.</span></div>`}
+    ${standalone ? '' : installBanner()}
     <div class="list-title">Exportar y respaldo</div>
     <div class="list">
       <button class="row" data-act="export"><span class="ico" style="background:#1f7a4522">📊</span><span class="mid">Exportar a Excel / CSV<small>Para tu contabilidad, por mes, año o rango</small></span><span class="chev">›</span></button>
-      <button class="row" data-act="backup"><span class="ico" style="background:#2f80ed22">☁️</span><span class="mid">Copia de seguridad<small>${S.settings.lastBackup ? 'Última: ' + new Date(S.settings.lastBackup).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : 'Nunca'} · guárdala en iCloud Drive</small></span><span class="chev">›</span></button>
+      <button class="row" data-act="backup"><span class="ico" style="background:#2f80ed22">☁️</span><span class="mid">Copia de seguridad<small>${S.settings.lastBackup ? 'Última: ' + new Date(S.settings.lastBackup).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : 'Nunca'} · guárdala en ${cloud()}</small></span><span class="chev">›</span></button>
       <button class="row" data-act="import"><span class="ico" style="background:#8e5cd922">📥</span><span class="mid">Restaurar o importar<small>Copia de seguridad o historial</small></span><span class="chev">›</span></button>
     </div>
     <div class="list-title">Categorías de ingreso (6)</div><div class="list">${catRows('ingreso')}</div>
@@ -764,9 +781,9 @@ async function openBackup() {
           <div class="muted" style="font-size:14px">${nPhotos} fotos de recibos · ${S.recurring.length} pagos fijos · tus categorías y cuentas</div>
           <div class="muted" style="font-size:13px;margin-top:8px">${S.settings.lastBackup ? 'Última copia: ' + new Date(S.settings.lastBackup).toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' }) : 'Aún no has guardado ninguna copia'}</div></div>
         <button class="btn" data-act="go">Guardar copia</button>
-        <div class="card"><h3>¿Cómo se guarda?</h3><p class="hint" style="margin:0">Toca <b>Guardar copia</b> → <b>Guardar en Archivos</b> → elige <b>iCloud Drive</b> → <b>Guardar</b>. Para recuperar todo en otro iPhone: Ajustes → Restaurar o importar.</p></div>
+        <div class="card"><h3>¿Cómo se guarda?</h3><p class="hint" style="margin:0">Toca <b>Guardar copia</b> → ${platform() === 'ios' ? '<b>Guardar en Archivos</b> → ' : ''}elige <b>${cloud()}</b> → <b>Guardar</b>. Para recuperar todo en otro celular: Ajustes → Restaurar o importar.</p></div>
         <div class="card"><h3>¿Por qué el archivo se ve como código?</h3><p class="hint" style="margin:0">La copia es un archivo hecho para que <b>Mi Dinero</b> lo lea, no para leerlo tú. Si lo abres verás texto técnico: es normal, así guarda todo sin perder nada. Para ver tus números de forma clara usa <b>Exportar a Excel</b>.</p></div>
-        <p class="hint" style="text-align:center;margin:0">🔒 Tus datos solo están en este iPhone y en tu propia cuenta de iCloud.</p>
+        <p class="hint" style="text-align:center;margin:0">🔒 Tus datos solo están en este dispositivo y en tu propia nube (${cloud()}).</p>
       </div>`,
     actions: { close: (b, s) => s.close(), go: async (b, s) => { s.close(); await doBackup(); } },
   });
@@ -779,7 +796,7 @@ async function doBackup() {
   const data = { app: 'mi-dinero', kind: 'respaldo', version: 1, exportedAt: new Date().toISOString(), settings: S.settings, categories: S.categories, accounts: S.accounts, recurring: S.recurring, txs: S.txs, photos };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const ok = await shareFile(blob, `MiDinero-respaldo-${today()}.json`);
-  if (ok) { S.settings.lastBackup = Date.now(); await persist.settings(); render(); toast('Copia lista. Guárdala en iCloud Drive.'); }
+  if (ok) { S.settings.lastBackup = Date.now(); await persist.settings(); render(); toast(`Copia lista. Guárdala en ${cloud()}.`); }
 }
 
 async function doImport() {
@@ -856,6 +873,7 @@ const MAIN = {
   backup: () => openBackup(),
   import: () => doImport(),
   wipe: () => wipe(),
+  install: async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); },
 };
 document.getElementById('view').addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b) MAIN[b.dataset.act]?.(b); });
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { V.tab = b.dataset.tab; render(); scrollTo(0, 0); } });
