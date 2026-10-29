@@ -2,7 +2,9 @@ import { db, askPersistence } from './db.js';
 import { DEFAULT_CATEGORIES, DEFAULT_ACCOUNTS, CURRENCIES, ICONS, COLORS, MONTHS, MONTHS_SHORT, WEEKDAYS } from './data.js';
 import { buildXlsx } from './xlsx.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
+const PUSH_API = 'https://mi-dinero-push.midinero-finanzas.workers.dev';
+const VAPID_PUBLIC = 'BFBKViSW9VWqGKNQovZGewy66-bVzdhGpBSwxQdc6dyTyGD3_jYA2RBXXUQPycU1hrfqHe3fXM8w-u0pKQutdOw';
 
 // ---------- utilidades ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -146,6 +148,7 @@ function viewInicio() {
       <div class="balance-row sub"><span class="muted">Acumulado al cierre</span><span class="val num">${fmt(acc)}</span></div>
     </section>
     ${pend.length ? `<button class="banner" data-act="tab" data-v="fijos"><span style="font-size:22px">🔁</span><span><b>${pend.length} pago${pend.length > 1 ? 's' : ''} fijo${pend.length > 1 ? 's' : ''} pendiente${pend.length > 1 ? 's' : ''}</b>${esc(pend.slice(0, 3).map(r => r.name).join(', '))}</span><span class="go">Ver ›</span></button>` : ''}
+    ${!reminder().on && !S.settings.reminderAsked && pushSupported() && isStandalone() ? `<div class="banner"><span style="font-size:22px">🔔</span><span><b>¿Te recuerdo registrar el día?</b>Una notificación diaria a las 8:00 p. m.</span><span style="display:flex;flex-direction:column;gap:6px;margin-left:auto"><button class="go" data-act="rem-ask">Activar</button><button class="go" style="color:var(--muted);font-weight:600" data-act="rem-skip">Ahora no</button></span></div>` : ''}
     ${backupDue() ? `<button class="banner" data-act="backup"><span style="font-size:22px">☁️</span><span><b>Guarda tu copia de seguridad</b>${S.settings.lastBackup ? 'Última: ' + new Date(S.settings.lastBackup).toLocaleDateString('es-CO') : 'Aún no has guardado ninguna'}</span><span class="go">Guardar ›</span></button>` : ''}
     <section class="card"><div class="cal">${cal}</div></section>
     <section class="card">
@@ -263,6 +266,73 @@ function viewFijos() {
   </div>`;
 }
 
+// ---------- recordatorio diario (notificaciones) ----------
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+const hourLabel = h => new Date(2000, 0, 1, h).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+const b64ToBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)), c => c.charCodeAt(0));
+const reminder = () => S.settings.reminder || { on: false, hour: 20 };
+
+async function pushApi(path, body) {
+  const r = await fetch(PUSH_API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'sin conexión');
+  return r.json();
+}
+async function pushSubscription(create) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub && create) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) });
+  return sub;
+}
+async function saveReminder(on, hour, endpoint) {
+  S.settings.reminder = { on, hour, endpoint: endpoint || null, tz: on ? timeZone() : null };
+  await persist.settings();
+  render();
+}
+async function enableReminder(hour = reminder().hour) {
+  if (!pushSupported()) return toast('Este navegador no permite notificaciones');
+  if (platform() === 'ios' && !isStandalone()) return toast('Primero instala la app en tu pantalla de inicio');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return toast('Permite las notificaciones de Mi Dinero en los ajustes del teléfono');
+  try {
+    const sub = await pushSubscription(true);
+    await pushApi('/subscribe', { endpoint: sub.endpoint, tz: timeZone(), hour });
+    await saveReminder(true, hour, sub.endpoint);
+    toast(`Listo: te recordaré todos los días a las ${hourLabel(hour)}`);
+  } catch (e) { toast('No se pudo activar: ' + e.message); }
+}
+async function disableReminder() {
+  try { const sub = await pushSubscription(false); if (sub) { await pushApi('/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); } } catch { /* sin conexión */ }
+  await saveReminder(false, reminder().hour);
+  toast('Recordatorio desactivado');
+}
+async function testReminder() {
+  try { const sub = await pushSubscription(false); if (!sub) return enableReminder(); await pushApi('/test', { endpoint: sub.endpoint }); toast('Enviada: llega en unos segundos'); }
+  catch (e) { toast(e.message === 'espera un minuto' ? 'Espera un minuto para otra prueba' : 'No se pudo enviar: ' + e.message); }
+}
+// Si viajas o el teléfono renueva su dirección de avisos, se actualiza sola al abrir la app
+async function syncReminder() {
+  const r = reminder();
+  if (!r.on || !pushSupported() || Notification.permission !== 'granted') return;
+  try {
+    const sub = await pushSubscription(true);
+    if (sub.endpoint !== r.endpoint || timeZone() !== r.tz) { await pushApi('/subscribe', { endpoint: sub.endpoint, tz: timeZone(), hour: r.hour }); S.settings.reminder = { ...r, endpoint: sub.endpoint, tz: timeZone() }; await persist.settings(); }
+  } catch { /* se intenta de nuevo la próxima vez */ }
+}
+function reminderSection() {
+  const r = reminder();
+  if (!pushSupported() && !(platform() === 'ios' && !isStandalone())) return '';
+  const opts = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === r.hour ? 'selected' : ''}>${hourLabel(h)}</option>`).join('');
+  return `<div class="list-title">Recordatorio diario</div>
+    <div class="list">
+      <button class="row" data-act="${r.on ? 'rem-off' : 'rem-on'}"><span class="ico" style="background:#c9a22722">🔔</span><span class="mid">Recordarme registrar el día<small>${r.on ? `Activado · todos los días a las ${hourLabel(r.hour)}` : 'Una notificación diaria a la hora que elijas'}</small></span><span class="switch ${r.on ? 'on' : ''}"><i></i></span></button>
+      ${r.on ? `<div class="row"><span class="ico" style="background:var(--card-2)">⏰</span><span class="mid">Hora</span><select name="rem-hour" class="hour-select">${opts}</select></div>
+      <button class="row" data-act="rem-test"><span class="ico" style="background:var(--card-2)">📨</span><span class="mid">Enviar notificación de prueba</span><span class="chev">›</span></button>` : ''}
+    </div>
+    <p class="hint" style="margin:0 4px">Llega a la hora del país donde estés, aunque la app esté cerrada. ${platform() === 'ios' ? 'En iPhone funciona con la app instalada en la pantalla de inicio.' : ''}</p>`;
+}
+
 // ---------- instalación (iPhone, Android, computador) ----------
 let installPrompt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (V.tab === 'ajustes') render(); });
@@ -287,6 +357,7 @@ function viewAjustes() {
   return `<div class="page-top"><h2>Ajustes</h2></div>
   <div class="page">
     ${standalone ? '' : installBanner()}
+    ${reminderSection()}
     <div class="list-title">Exportar y respaldo</div>
     <div class="list">
       <button class="row" data-act="export"><span class="ico" style="background:#1f7a4522">📊</span><span class="mid">Exportar a Excel / CSV<small>Para tu contabilidad, por mes, año o rango</small></span><span class="chev">›</span></button>
@@ -873,9 +944,15 @@ const MAIN = {
   backup: () => openBackup(),
   import: () => doImport(),
   wipe: () => wipe(),
+  'rem-on': () => enableReminder(),
+  'rem-off': () => disableReminder(),
+  'rem-test': () => testReminder(),
+  'rem-ask': () => enableReminder(20),
+  'rem-skip': async () => { S.settings.reminderAsked = true; await persist.settings(); render(); },
   install: async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); },
 };
 document.getElementById('view').addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b) MAIN[b.dataset.act]?.(b); });
+document.getElementById('view').addEventListener('change', e => { if (e.target.name === 'rem-hour') enableReminder(+e.target.value); });
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { V.tab = b.dataset.tab; render(); scrollTo(0, 0); } });
 
 // ---------- efecto al tocar ----------
@@ -903,5 +980,6 @@ document.addEventListener('pointerdown', e => {
   await load();
   render();
   askPersistence();
+  syncReminder();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});
 })();
