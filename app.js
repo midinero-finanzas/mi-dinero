@@ -2,8 +2,10 @@ import { db, askPersistence } from './db.js';
 import { DEFAULT_CATEGORIES, DEFAULT_ACCOUNTS, CURRENCIES, ICONS, COLORS, MONTHS, MONTHS_SHORT, WEEKDAYS } from './data.js';
 import { buildXlsx } from './xlsx.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const PUSH_API = 'https://mi-dinero-push.midinero-finanzas.workers.dev';
+const TRIAL_DAYS = 7;
+const SUPPORT_WA = ''; // WhatsApp de ventas y soporte, con indicativo (ej. 573001234567)
 const VAPID_PUBLIC = 'BFBKViSW9VWqGKNQovZGewy66-bVzdhGpBSwxQdc6dyTyGD3_jYA2RBXXUQPycU1hrfqHe3fXM8w-u0pKQutdOw';
 
 // ---------- utilidades ----------
@@ -30,7 +32,7 @@ function fmt(n, sign = false) {
 }
 
 // ---------- estado ----------
-const S = { settings: null, categories: [], accounts: [], recurring: [], txs: [] };
+const S = { license: null, settings: null, categories: [], accounts: [], recurring: [], txs: [] };
 const V = { tab: 'inicio', month: thisMonth(), day: null, scope: 'todo', bal: 'mes', year: new Date().getFullYear(), kind: 'gasto' };
 let CAT = {}, ACC = {};
 const reindex = () => { CAT = Object.fromEntries(S.categories.map(c => [c.id, c])); ACC = Object.fromEntries(S.accounts.map(a => [a.id, a])); };
@@ -44,13 +46,24 @@ const persist = {
 };
 
 async function load() {
-  S.settings = (await db.get('kv', 'settings')) || { currency: 'COP', lastScope: 'personal', lastAccount: 'a1', lastBackup: null, createdAt: Date.now() };
+  const prev = await db.get('kv', 'settings');
+  // Quien ya usaba la app antes de las licencias queda como fundador: gratis para siempre
+  S.license = (await db.get('kv', 'license')) || { deviceId: newDeviceId(), trialStart: Date.now(), founder: !!prev };
+  await db.put('kv', S.license, 'license');
+  S.settings = prev || { currency: 'COP', lastScope: 'personal', lastAccount: 'a1', lastBackup: null, createdAt: Date.now() };
   S.categories = (await db.get('kv', 'categories')) || structuredClone(DEFAULT_CATEGORIES);
   S.accounts = (await db.get('kv', 'accounts')) || structuredClone(DEFAULT_ACCOUNTS);
   S.recurring = (await db.get('kv', 'recurring')) || [];
   S.txs = await db.all('txs');
   reindex();
   await Promise.all([persist.settings(), persist.categories(), persist.accounts(), persist.recurring()]);
+}
+
+// Borra los datos pero conserva la licencia y la prueba gratis de este dispositivo
+async function clearData() {
+  const lic = S.license;
+  await db.clear();
+  if (lic) await db.put('kv', lic, 'license');
 }
 
 async function saveTx(t) {
@@ -147,6 +160,7 @@ function viewInicio() {
       <div class="balance-row"><span>Saldo del mes</span><span class="val num ${t.bal >= 0 ? 'inc' : 'exp'}">${fmt(t.bal)}</span></div>
       <div class="balance-row sub"><span class="muted">Acumulado al cierre</span><span class="val num">${fmt(acc)}</span></div>
     </section>
+    ${licenseBanner()}
     ${pend.length ? `<button class="banner" data-act="tab" data-v="fijos"><span style="font-size:22px">🔁</span><span><b>${pend.length} pago${pend.length > 1 ? 's' : ''} fijo${pend.length > 1 ? 's' : ''} pendiente${pend.length > 1 ? 's' : ''}</b>${esc(pend.slice(0, 3).map(r => r.name).join(', '))}</span><span class="go">Ver ›</span></button>` : ''}
     ${!reminder().on && !S.settings.reminderAsked && pushSupported() && isStandalone() ? `<div class="banner"><span style="font-size:22px">🔔</span><span><b>¿Te recuerdo registrar el día?</b>Una notificación diaria a las 8:00 p. m.</span><span style="display:flex;flex-direction:column;gap:6px;margin-left:auto"><button class="go" data-act="rem-ask">Activar</button><button class="go" style="color:var(--muted);font-weight:600" data-act="rem-skip">Ahora no</button></span></div>` : ''}
     ${backupDue() ? `<button class="banner" data-act="backup"><span style="font-size:22px">☁️</span><span><b>Guarda tu copia de seguridad</b>${S.settings.lastBackup ? 'Última: ' + new Date(S.settings.lastBackup).toLocaleDateString('es-CO') : 'Aún no has guardado ninguna'}</span><span class="go">Guardar ›</span></button>` : ''}
@@ -333,6 +347,82 @@ function reminderSection() {
     <p class="hint" style="margin:0 4px">Llega a la hora del país donde estés, aunque la app esté cerrada. ${platform() === 'ios' ? 'En iPhone funciona con la app instalada en la pantalla de inicio.' : ''}</p>`;
 }
 
+// ---------- licencia ----------
+function newDeviceId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function licState() {
+  const L = S.license;
+  if (L.founder) return { st: 'fundador' };
+  if (L.code) return { st: 'activa' };
+  const left = TRIAL_DAYS - Math.floor((Date.now() - L.trialStart) / 864e5);
+  return left > 0 ? { st: 'prueba', left } : { st: 'vencida' };
+}
+const canRegister = () => licState().st !== 'vencida';
+const deviceLabel = () => { const ua = navigator.userAgent; return /ipad/i.test(ua) || (platform() === 'ios' && !/iphone/i.test(ua)) ? 'iPad' : platform() === 'ios' ? 'iPhone' : platform() === 'android' ? 'Android' : /mac/i.test(ua) ? 'Mac' : /windows/i.test(ua) ? 'Windows' : 'Computador'; };
+const buyLink = () => SUPPORT_WA ? `https://wa.me/${SUPPORT_WA}?text=${encodeURIComponent('Hola, quiero comprar mi licencia de MI DINERO')}` : '';
+async function saveLicense(changes) { Object.assign(S.license, changes); await db.put('kv', S.license, 'license'); render(); }
+async function activateLicense(code) {
+  const r = await pushApi('/license/activate', { code, device: S.license.deviceId, label: deviceLabel() });
+  await saveLicense({ code: r.code, plan: r.plan, planName: r.planName, activatedAt: Date.now(), checkedAt: Date.now() });
+}
+// Cada pocos días, con internet, confirma que el código siga vigente (por si se desactivó o se liberó este dispositivo)
+async function checkLicense() {
+  const L = S.license;
+  if (!L.code || (L.checkedAt && Date.now() - L.checkedAt < 3 * 864e5)) return;
+  try {
+    const r = await pushApi('/license/check', { code: L.code, device: L.deviceId });
+    if (r.ok) await saveLicense({ checkedAt: Date.now() });
+    else { await saveLicense({ code: null, plan: null, planName: null, removedAt: Date.now() }); toast('Tu licencia ya no está activa en este dispositivo'); }
+  } catch { /* sin internet: se revisa la próxima vez */ }
+}
+function licenseBanner() {
+  const l = licState();
+  if (l.st === 'prueba') return `<button class="banner" data-act="license"><span style="font-size:22px">🎁</span><span><b>Prueba gratis: ${l.left === 1 ? 'último día' : `te quedan ${l.left} días`}</b>Activa tu licencia cuando quieras</span><span class="go">Activar ›</span></button>`;
+  if (l.st === 'vencida') return `<button class="banner warn" data-act="license"><span style="font-size:22px">🔑</span><span><b>Tu prueba gratis terminó</b>Tus datos siguen aquí: puedes verlos y exportarlos. Activa tu licencia para registrar movimientos nuevos.</span><span class="go">Activar ›</span></button>`;
+  return '';
+}
+function licenseRow() {
+  const l = licState(), L = S.license;
+  const sub = { fundador: 'Usuario fundador · gratis para siempre', activa: `${esc(L.planName || 'Licencia')} · activada en este dispositivo`, prueba: `Prueba gratis · ${l.left === 1 ? 'último día' : `quedan ${l.left} días`}`, vencida: 'Prueba terminada · toca para activar' }[l.st];
+  return `<div class="list-title">Licencia</div>
+    <div class="list"><button class="row" data-act="license"><span class="ico" style="background:#c9a22722">${l.st === 'fundador' || l.st === 'activa' ? '✅' : '🔑'}</span><span class="mid">${l.st === 'fundador' || l.st === 'activa' ? 'MI DINERO activada' : 'Activar licencia'}<small>${sub}</small></span><span class="chev">›</span></button></div>`;
+}
+function openLicense() {
+  const st = { code: '', busy: false };
+  const l = licState(), L = S.license;
+  const done = l.st === 'fundador' || l.st === 'activa';
+  openSheet({
+    render: () => `<div class="sheet-head"><button></button><h3>Licencia</h3><button data-act="close">Cerrar</button></div>
+      <div class="sheet-body">
+        ${done ? `<div class="card" style="text-align:center"><div style="font-size:44px">✅</div>
+          <div style="font-size:20px;font-weight:800;margin-top:4px">MI DINERO activada</div>
+          <div class="muted" style="font-size:14px;margin-top:4px">${l.st === 'fundador' ? 'Eres usuario fundador: la app es gratis para siempre en este dispositivo. ¡Gracias por estar desde el principio!' : `${esc(L.planName || 'Licencia')} · código ${esc(L.code)}<br>Activada el ${new Date(L.activatedAt).toLocaleDateString('es-CO', { dateStyle: 'long' })}`}</div></div>`
+        : `<div class="card" style="text-align:center"><div style="font-size:44px">🔑</div>
+          <div style="font-size:18px;font-weight:800;margin-top:4px">${l.st === 'prueba' ? `Prueba gratis: ${l.left === 1 ? 'último día' : `quedan ${l.left} días`}` : 'Tu prueba gratis terminó'}</div>
+          <div class="muted" style="font-size:14px;margin-top:4px">Escribe el código que recibiste al comprar. Se activa una sola vez y después funciona sin internet.</div></div>
+        <div class="field"><label>Código</label><input type="text" name="code" value="${esc(st.code)}" placeholder="MD-XXXX-XXXX" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="14" style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.05em;text-transform:uppercase"></div>
+        <button class="btn" data-act="activate" ${st.busy ? 'disabled' : ''}>${st.busy ? 'Activando…' : 'Activar'}</button>
+        ${buyLink() ? `<a class="btn sec" href="${buyLink()}" target="_blank" rel="noopener">¿No tienes código? Cómpralo por WhatsApp</a>` : ''}
+        <div class="card"><h3>Planes de pago único</h3><p class="hint" style="margin:0"><b>Personal:</b> 1 persona en 2 dispositivos (por ejemplo celular y computador).<br><b>Barbería:</b> hasta 5 personas, 2 dispositivos cada una. Cada barbero lleva sus propios datos en su celular.</p></div>
+        <p class="hint" style="text-align:center;margin:0">🔒 Aunque no actives, tus datos nunca se bloquean: siempre puedes verlos, exportarlos a Excel y guardar tu copia de seguridad.</p>`}
+      </div>`,
+    onInput: e => { if (e.target.name === 'code') st.code = e.target.value; },
+    onMount: s => s.el.querySelector('input[name=code]')?.addEventListener('keydown', e => { if (e.key === 'Enter') s.el.querySelector('[data-act=activate]').click(); }),
+    actions: {
+      close: (b, s) => s.close(),
+      activate: async (b, s) => {
+        if (st.busy) return;
+        if (st.code.replace(/[^a-z0-9]/gi, '').replace(/^md/i, '').length !== 8) { toast('El código tiene 8 letras y números, como MD-7K4P-Q2XW'); return; }
+        st.busy = true; s.refresh();
+        try { await activateLicense(st.code); s.close(); toast('¡Listo! MI DINERO quedó activada'); }
+        catch (e) { st.busy = false; s.refresh(); toast(e.message === 'Failed to fetch' || e.message === 'Load failed' ? 'Necesitas internet para activar' : e.message); }
+      },
+    },
+  });
+}
+
 // ---------- instalación (iPhone, Android, computador) ----------
 let installPrompt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (V.tab === 'ajustes') render(); });
@@ -357,6 +447,7 @@ function viewAjustes() {
   return `<div class="page-top"><h2>Ajustes</h2></div>
   <div class="page">
     ${standalone ? '' : installBanner()}
+    ${licenseRow()}
     ${reminderSection()}
     <div class="list-title">Exportar y respaldo</div>
     <div class="list">
@@ -888,7 +979,7 @@ async function doImport() {
     if (!ok) return;
   }
   if (mode === 'replace') {
-    await db.clear();
+    await clearData();
     S.settings = { ...data.settings, lastBackup: data.settings?.lastBackup || null };
     S.categories = data.categories || structuredClone(DEFAULT_CATEGORIES);
     S.accounts = data.accounts || structuredClone(DEFAULT_ACCOUNTS);
@@ -915,7 +1006,7 @@ async function wipe() {
   if (a === 'backup') return openBackup();
   if (a !== 'wipe') return;
   if (!(await ask('¿Seguro?', 'Esta es la última confirmación.', [{ label: 'Sí, borrar todo', style: 'danger', value: true }, { label: 'Cancelar', style: 'sec', value: false }]))) return;
-  await db.clear();
+  await clearData();
   await load();
   render(); toast('Datos borrados');
 }
@@ -930,7 +1021,7 @@ const MAIN = {
   bal: b => { V.bal = b.dataset.v; V.year = +V.month.slice(0, 4); render(); },
   kind: b => { V.kind = b.dataset.v; render(); },
   'goto-month': b => { V.month = b.dataset.v; V.bal = 'mes'; render(); scrollTo(0, 0); },
-  new: b => openEntry({ type: b.dataset.v }),
+  new: b => (canRegister() ? openEntry({ type: b.dataset.v }) : openLicense()),
   'edit-tx': b => openEntry({ tx: S.txs.find(t => t.id === b.dataset.id) }),
   'cat-detail': b => openCatDetail(b.dataset.id),
   'edit-cat': b => openCatEditor(b.dataset.id),
@@ -938,7 +1029,8 @@ const MAIN = {
   'new-acc': () => openAccEditor(null),
   'new-rec': () => openRecEditor(null),
   'edit-rec': b => openRecEditor(b.dataset.id),
-  'pay-rec': b => payRecurring(b.dataset.id),
+  'pay-rec': b => (canRegister() ? payRecurring(b.dataset.id) : openLicense()),
+  license: () => openLicense(),
   currency: () => openCurrency(),
   export: () => openExport(),
   backup: () => openBackup(),
@@ -981,5 +1073,6 @@ document.addEventListener('pointerdown', e => {
   render();
   askPersistence();
   syncReminder();
+  checkLicense();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});
 })();
